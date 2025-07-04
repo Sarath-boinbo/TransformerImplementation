@@ -118,10 +118,6 @@ def get_data_loaders(device, batch_size=128):
 
 # --- 3. Test Block ---
 if __name__ == '__main__':
-    """
-    This special block runs only when you execute the script directly from your terminal.
-    Usage: python src/data_loader.py
-    """
     print("Testing the data loader with the modern torchtext API...")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     BATCH_SIZE = 128
