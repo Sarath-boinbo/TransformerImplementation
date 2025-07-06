@@ -67,6 +67,7 @@ def get_data_loaders(device, batch_size=128):
 
     # Build Vocabularies
     # Use min_freq=2 to filter out rare tokens and keep vocab size reasonable.
+    # Use special_first=true to keep special characters and their indexes in the right spots
     vocab_src = build_vocab_from_iterator(
         yield_tokens(train_data_list, tokenize_de, 0),
         min_freq=2,
