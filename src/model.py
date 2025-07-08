@@ -8,7 +8,9 @@ Calculates the attention for all heads and outputs the final output tensor and t
 """
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_model: int, heads: int, p: float) -> None:
+
         super().__init__()
+
         # Make sure model dimension is divisible by heads parameter for proper calculations.
         assert d_model % heads == 0, "Model dimensions must be divisible by head count!"
 
@@ -28,9 +30,9 @@ class MultiHeadAttention(nn.Module):
     
     """
     Forward pass method; attention calculation is done here
-    Attention function is as follows: Attention(Q, K, V) = softmax((QK^T)/sqrt(d_k))V
+    Attention function is as follows: Attention(Q, K, V) = softmax( (QK^T)/sqrt(d_k) ) * V
     """
-    def forward(self, query: Tensor, key: Tensor, value: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
+    def forward_pass(self, query: Tensor, key: Tensor, value: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
         batch_size: int = query.shape[0]
 
         # Q, K, and V hold the projected tensors after passing inputs through linear layers
@@ -39,7 +41,7 @@ class MultiHeadAttention(nn.Module):
         V: Tensor = self.fc_v(value)
 
         # Reshape tensors for multi-head attention calculation
-        # Shape becomes [batch_size, h, sequence_length, d_k]
+        # Shape becomes [batch_size, h, sequence_length, d_k] after permute switches h and sequence_length
         Q = Q.view(batch_size, -1, self.heads, self.d_k).permute(0, 2, 1, 3)
         K = K.view(batch_size, -1, self.heads, self.d_k).permute(0, 2, 1, 3)
         V = V.view(batch_size, -1, self.heads, self.d_k).permute(0, 2, 1, 3)
@@ -55,14 +57,18 @@ class MultiHeadAttention(nn.Module):
         attention: Tensor = torch.softmax(scores, dim=-1)
         
         # 3. Apply attention to V
+        # Shape of x =  [batch_size, sequence_length, h, d_k]
         x: Tensor = torch.matmul(self.dropout(attention), V)
         
-        # Concatenate heads
-        # .view() requires the tensor to be contiguous in memory
+        # 4. Concatenate heads; .view() requires the tensor to be contiguous in memory
+        # Shape of x after permute: [batch_size, h, sequence_length, d_k]
         x = x.permute(0, 2, 1, 3).contiguous()
+
+        # Shape of x after view: [batch_size, sequence_length, d_model]
+        # d_model = d_k * h, so the two dimensions get flattened essentially
         x = x.view(batch_size, -1, self.d_model)
         
-        # Final projection
+        # 5. Final projection
         x = self.fc_o(x)
         
         return x, attention
