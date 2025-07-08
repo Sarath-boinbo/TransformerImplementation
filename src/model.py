@@ -1,7 +1,6 @@
 import torch
-import math
 from torch import Tensor, nn
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 """
 Base values from paper:
@@ -249,3 +248,100 @@ class Encoder(nn.Module):
             src = layer(src, src_mask)
 
         return src
+
+"""
+Sixth class that implements the Decoder layer from the paper.
+This is similar to the EncoderLayer, but has an additional attention layer 
+to look at the Encoder's output.
+"""
+class DecoderLayer(nn.Module):
+    def __init__(self, d_model: int, heads: int, d_ff: int, p: float) -> None:
+        super().__init__()
+
+        # Masked self-attention sub-layer for the target sequence
+        self.self_attn: MultiHeadAttention = MultiHeadAttention(d_model, heads, p)
+
+        # Encoder-decoder attention sub-layer
+        self.encoder_attn: MultiHeadAttention = MultiHeadAttention(d_model, heads, p)
+
+        # Position-wise feed-forward sub-layer
+        self.feed_forward: PositionwiseFeedForward = PositionwiseFeedForward(d_model, d_ff, p)
+
+        # Layer normalization for each of the three sub-layers
+        self.norm1: nn.LayerNorm = nn.LayerNorm(d_model)
+        self.norm2: nn.LayerNorm = nn.LayerNorm(d_model)
+        self.norm3: nn.LayerNorm = nn.LayerNorm(d_model)
+
+        # Dropout for each of the three sub-layers
+        self.dropout1: nn.Dropout = nn.Dropout(p)
+        self.dropout2: nn.Dropout = nn.Dropout(p)
+        self.dropout3: nn.Dropout = nn.Dropout(p)
+
+    def forward(self, trg: Tensor, enc_src: Tensor, trg_mask: Tensor, src_mask: Tensor) -> Tuple[Tensor, Any]:
+        """
+        Defines the forward pass for the Decoder layer.
+        It has three sub-layers, each followed by a residual connection and layer norm.
+        """
+        # --- Sub-layer 1: Masked Multi-Head Self-Attention ---
+        # The target mask (trg_mask) is used here to prevent attending to future tokens.
+        _trg, _ = self.self_attn(trg, trg, trg, trg_mask)
+        trg = self.norm1(trg + self.dropout1(_trg))
+
+        # --- Sub-layer 2: Encoder-Decoder Attention ---
+        # The query comes from the previous sub-layer's output (trg).
+        # The key and value come from the encoder's output (enc_src).
+        # The source mask (src_mask) is used here.
+        _trg, attention = self.encoder_attn(trg, enc_src, enc_src, src_mask)
+        trg = self.norm2(trg + self.dropout2(_trg))
+
+        # --- Sub-layer 3: Position-wise Feed-Forward ---
+        _trg = self.feed_forward(trg)
+        trg = self.norm3(trg + self.dropout3(_trg))
+
+        # The attention weights from the encoder-decoder attention are also returned
+        # for potential visualization later.
+        return trg, attention
+
+"""
+Seventh class that implements the full Decoder from the paper.
+This module stacks N DecoderLayer blocks and also handles the initial token
+embedding and positional encoding for the target sequence.
+"""
+class Decoder(nn.Module):
+    def __init__(self, output_dim: int, d_model: int, N: int, heads: int, d_ff: int, p: float, device: torch.device) -> None:
+        super().__init__()
+        self.device = device
+
+        # Token embedding layer for the target vocabulary
+        self.tok_embedding: nn.Embedding = nn.Embedding(output_dim, d_model)
+
+        # Positional encoding module
+        self.pos_encoding: PositionalEncoding = PositionalEncoding(d_model, p)
+
+        # A stack of N decoder layers, correctly registered using nn.ModuleList
+        self.layers: nn.ModuleList = nn.ModuleList([DecoderLayer(d_model, heads, d_ff, p) for _ in range(N)])
+
+        # Store d_model to scale the embeddings
+        self.d_model: int = d_model
+
+    def forward(self, trg: Tensor, enc_src: Tensor, trg_mask: Tensor, src_mask: Tensor) -> Tuple[Tensor, Tensor]:
+        """
+        Defines the forward pass for the full Decoder.
+        """
+        # 1. Pass the target sequence through the token embedding layer
+        # trg shape: [batch_size, trg_len, d_model]
+        trg = self.tok_embedding(trg)
+
+        # 2. Scale the embeddings by sqrt(d_model)
+        trg = trg * (self.d_model**0.5)
+
+        # 3. Add positional encodings
+        trg = self.pos_encoding(trg)
+
+        # 4. Loop through the N decoder layers
+        for layer in self.layers:
+            # The DecoderLayer returns the processed target tensor and the attention weights
+            trg, attention = layer(trg, enc_src, trg_mask, src_mask)
+
+        # Return the final output tensor and the attention weights from the last layer
+        return trg, attention
