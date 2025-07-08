@@ -184,13 +184,12 @@ class PositionalEncoding(nn.Module):
         # which is represented here.
         two_i = torch.arange(0, d_model, 2).float()
 
-        # Calculates the reciprocal of the denominator term ( 10000 ^ (2i/d_model) ) from the formula in section 3.5.
-        # Multiplication can be faster than division, especially when performed at large scale DL operations
-        div_term = torch.exp(two_i * (-math.log(10000.0) / d_model))
+        # Calculates the denominator term (10000 ^ (2i/d_model)) from the formula in section 3.5.
+        div_term = torch.pow(10000.0, two_i / d_model)
         
         # Calculate the positional encodings using sine for even indices and cosine for odd indices
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
+        pe[:, 0::2] = torch.sin(position / div_term)
+        pe[:, 1::2] = torch.cos(position / div_term)
         
         # Add a batch dimension so it can be added to the input embeddings
         pe = pe.unsqueeze(0) # Shape: [1, max_len, d_model]
