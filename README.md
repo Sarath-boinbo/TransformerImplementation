@@ -12,12 +12,12 @@ This project implements the Transformer architecture from scratch, based on the 
 TransformerImplementation/
 ├── src/
 │   ├── data_loader.py      # ✅ Completed
-│   ├── model.py            # 🔄 In Progress
-│   ├── training.py         # ⏳ Planned
+│   ├── model.py            # ✅ Completed
+│   ├── train.py            # ⏳ Planned
 │   └── utils.py            # ⏳ Planned
 ├── main.py                 # 🔄 Basic structure
 ├── pyproject.toml          # ✅ Dependencies configured
-├── README.md              # 🔄 This file
+├── README.md              # ✅ Updated
 └── .gitignore             # ✅ Version control setup
 ```
 
@@ -56,32 +56,56 @@ The project uses the following key dependencies (see `pyproject.toml`):
 
 Implemented in `src/model.py` (`MultiHeadAttention` class)
 
+**Paper Reference:** Section 3.2.2 "Multi-Head Attention" and Section 3.2.1 "Scaled Dot-Product Attention"
+
 - Computes scaled dot-product attention across multiple heads in parallel. Each head projects the input into query, key, and value spaces, computes attention, and the results are concatenated and projected back to the model dimension.
 - Supports masking and dropout on attention weights.
+
+**Paper Formula Implementation:**
+- **Scaled Dot-Product Attention**: $\text{Attention}(Q,K,V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V$ (Section 3.2.1)
+- **Multi-Head Attention**: $\text{MultiHead}(Q,K,V) = \text{Concat}(\text{head}_1,...,\text{head}_h)W^O$ where $\text{head}_i = \text{Attention}(QW_i^Q, KW_i^K, VW_i^V)$ (Section 3.2.2)
 
 **Code snippet:**
 ```python
 class MultiHeadAttention(nn.Module):
-    ...
     def forward(self, query, key, value, mask=None):
-        # Linear projections, reshape for heads
-        # Scaled dot-product attention
-        # Masking, softmax, dropout
-        # Concatenate heads, final linear projection
+        # Linear projections: Q, K, V = query@W^Q, key@W^K, value@W^V
+        Q = self.fc_q(query)
+        K = self.fc_k(key)
+        V = self.fc_v(value)
+        
+        # Scaled dot-product attention: scores = QK^T/√d_k
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.d_k**0.5)
+        
+        # Apply softmax and multiply by V
+        attention = torch.softmax(scores, dim=-1)
+        x = torch.matmul(self.dropout(attention), V)
+        
+        # Final linear projection: output = x@W^O
+        x = self.fc_o(x)
         return x, attention
 ```
 
 ### Positional Encoding
 
-The positional encoding implementation in `src/model.py` matches the original formula from the "Attention Is All You Need" paper:
-- The denominator is calculated as $10000^{2i/d_{model}}$.
-- The sine and cosine functions use `position / div_term` as in the paper.
+Implemented in `src/model.py` (`PositionalEncoding` class)
 
-**Code Snippet:**
+**Paper Reference:** Section 3.5 "Positional Encoding"
+
+The positional encoding implementation exactly matches the original formula from the "Attention Is All You Need" paper:
+
+**Paper Formula Implementation:**
+- **Positional Encoding**: $PE_{(pos,2i)} = \sin\left(\frac{pos}{10000^{2i/d_{model}}}\right)$ and $PE_{(pos,2i+1)} = \cos\left(\frac{pos}{10000^{2i/d_{model}}}\right)$ (Section 3.5)
+
+**Code Implementation:**
 ```python
-# div_term calculation and usage
+# Paper formula: div_term = 10000^(2i/d_model)
 div_term = torch.pow(10000.0, two_i / d_model)
+
+# Paper formula: PE(pos,2i) = sin(pos/10000^(2i/d_model))
 pe[:, 0::2] = torch.sin(position / div_term)
+
+# Paper formula: PE(pos,2i+1) = cos(pos/10000^(2i/d_model))
 pe[:, 1::2] = torch.cos(position / div_term)
 ```
 
@@ -89,58 +113,150 @@ This ensures the positional encoding exactly matches the published equations, im
 
 ### Encoder-Decoder Architecture
 
-Implemented in `src/model.py` (`Encoder` class, encoder only so far)
+Implemented in `src/model.py` (`Encoder` and `Decoder` classes)
 
+**Paper Reference:** Section 3.1 "Encoder and Decoder Stacks"
+
+**Encoder:**
 - The encoder stacks N identical layers, each with multi-head self-attention and feed-forward sub-layers, with residual connections and layer normalization.
 - Token embedding and positional encoding are applied before the stack.
-- Embeddings are scaled by $\sqrt{d_{model}}$.
+- Embeddings are scaled by $\sqrt{d_{model}}$ as specified in Section 3.4.
+- Supports source sequence masking to ignore padding tokens.
+
+**Decoder:**
+- The decoder also stacks N identical layers, but with three sub-layers per layer:
+  1. Masked multi-head self-attention (prevents attending to future tokens)
+  2. Multi-head encoder-decoder attention (attends to encoder output)
+  3. Position-wise feed-forward network
+- Each sub-layer has residual connections and layer normalization.
+- Supports both target sequence masking (for future tokens) and source sequence masking.
+
+**Paper Formula Implementation:**
+- **Embedding Scaling**: $\text{Embedding} \times \sqrt{d_{model}}$ (Section 3.4)
+- **Sub-layer Output**: $\text{LayerNorm}(x + \text{Sublayer}(x))$ (Section 3.1)
 
 **Code snippet:**
 ```python
 class Encoder(nn.Module):
-    ...
     def forward(self, src, src_mask):
+        # Paper formula: Embedding * √d_model (Section 3.4)
         src = self.tok_embedding(src)
         src = src * (self.d_model**0.5)
         src = self.pos_encoding(src)
         for layer in self.layers:
             src = layer(src, src_mask)
         return src
+
+class Decoder(nn.Module):
+    def forward(self, trg, enc_src, trg_mask, src_mask):
+        # Paper formula: Embedding * √d_model (Section 3.4)
+        trg = self.tok_embedding(trg)
+        trg = trg * (self.d_model**0.5)
+        trg = self.pos_encoding(trg)
+        for layer in self.layers:
+            trg, attention = layer(trg, enc_src, trg_mask, src_mask)
+        return trg, attention
 ```
 
 ### Feed-Forward Networks
 
 Implemented in `src/model.py` (`PositionwiseFeedForward` class)
 
+**Paper Reference:** Section 3.3 "Position-wise Feed-Forward Networks"
+
 - Applies two linear transformations with a ReLU activation in between, independently to each position.
 - Expands dimension from `d_model` to `d_ff`, then projects back.
 - Dropout after activation.
 
+**Paper Formula Implementation:**
+- **Position-wise Feed-Forward**: $\text{FFN}(x) = \max(0, xW_1 + b_1)W_2 + b_2$ (Section 3.3)
+
 **Code snippet:**
 ```python
 class PositionwiseFeedForward(nn.Module):
-    ...
     def forward(self, x):
+        # Paper formula: FFN(x) = max(0, xW_1 + b_1)W_2 + b_2
         return self.fc_2(self.dropout(self.relu(self.fc_1(x))))
 ```
 
 ### Layer Normalization
 
-Implemented in `src/model.py` (used in `EncoderLayer`)
+Implemented in `src/model.py` (used in `EncoderLayer` and `DecoderLayer`)
+
+**Paper Reference:** Section 3.1 "Encoder and Decoder Stacks"
 
 - Each sub-layer (attention, feed-forward) is followed by a residual connection and layer normalization.
-- Two layer norms per encoder layer. Dropout applied to sub-layer outputs before addition.
+- Two layer norms per encoder layer, three per decoder layer.
+- Dropout applied to sub-layer outputs before addition.
+
+**Paper Formula Implementation:**
+- **Sub-layer Output**: $\text{LayerNorm}(x + \text{Sublayer}(x))$ (Section 3.1)
 
 **Code snippet:**
 ```python
 class EncoderLayer(nn.Module):
-    ...
     def forward(self, src, src_mask):
+        # Paper formula: LayerNorm(x + Sublayer(x)) (Section 3.1)
         _src, _ = self.self_attn(src, src, src, src_mask)
         src = self.norm1(src + self.dropout1(_src))
         _src = self.feed_forward(src)
         src = self.norm2(src + self.dropout2(_src))
         return src
+
+class DecoderLayer(nn.Module):
+    def forward(self, trg, enc_src, trg_mask, src_mask):
+        # Paper formula: LayerNorm(x + Sublayer(x)) (Section 3.1)
+        _trg, _ = self.self_attn(trg, trg, trg, trg_mask)
+        trg = self.norm1(trg + self.dropout1(_trg))
+        _trg, attention = self.encoder_attn(trg, enc_src, enc_src, src_mask)
+        trg = self.norm2(trg + self.dropout2(_trg))
+        _trg = self.feed_forward(trg)
+        trg = self.norm3(trg + self.dropout3(_trg))
+        return trg, attention
+```
+
+### Complete Transformer Model
+
+Implemented in `src/model.py` (`Transformer` class)
+
+**Paper Reference:** Section 3 "Model Architecture" (Complete model)
+
+The complete Transformer model combines the encoder and decoder with proper masking mechanisms:
+
+**Key Features:**
+- **Source Masking**: Prevents attention to padding tokens in the source sequence
+- **Target Masking**: Combines padding mask with causal mask to prevent attending to future tokens
+- **Weight Sharing**: Decoder embedding weights are shared with the final linear layer (Section 3.4)
+- **Attention Visualization**: Returns attention weights for potential visualization
+
+**Paper Formula Implementation:**
+- **Weight Sharing**: "We also use the learned embeddings to convert the output probabilities to next-token probabilities" (Section 3.4)
+
+**Masking Implementation:**
+```python
+def create_src_mask(self, src):
+    # Paper: Masks padding tokens in source sequence
+    src_mask = (src != self.src_pad_idx).unsqueeze(1).unsqueeze(2)
+    return src_mask
+
+def create_trg_mask(self, trg):
+    # Paper: Combines padding mask with causal mask for autoregressive generation
+    trg_pad_mask = (trg != self.trg_pad_idx).unsqueeze(1).unsqueeze(2)
+    trg_sub_mask = torch.tril(torch.ones((trg_len, trg_len))).bool()
+    trg_mask = trg_pad_mask & trg_sub_mask
+    return trg_mask
+```
+
+**Forward Pass:**
+```python
+def forward(self, src, trg):
+    # Paper: Complete transformer forward pass
+    src_mask = self.create_src_mask(src)
+    trg_mask = self.create_trg_mask(trg)
+    enc_src = self.encoder(src, src_mask)
+    output, attention = self.decoder(trg, enc_src, trg_mask, src_mask)
+    output = self.fc_out(output)
+    return output, attention
 ```
 
 ## Data Preprocessing Details
@@ -188,6 +304,62 @@ def collate_fn(batch):
 - **Source**: German text from Multi30k dataset
 - **Target**: English text from Multi30k dataset
 - **Format**: Raw text pairs → Tokenized → Padded tensors
+
+## Model Architecture Details
+
+### Implementation Insights
+
+**Multi-Head Attention Implementation:**
+- **Head Division**: Model dimension is divided equally among heads (`d_k = d_model // heads`)
+- **Tensor Reshaping**: Uses `permute(0, 2, 1, 3)` to switch head and sequence dimensions
+- **Scaling**: Attention scores are scaled by `1/sqrt(d_k)` as per the paper
+- **Masking**: Supports optional masking with `masked_fill(mask == 0, -1e9)`
+
+**Positional Encoding:**
+- **Sinusoidal Functions**: Uses both sine and cosine functions for even/odd dimensions
+- **Frequency Calculation**: Denominator calculated as `10000^(2i/d_model)` for dimension `i`
+- **Buffer Registration**: Positional encodings stored as non-trainable buffers
+
+**Residual Connections:**
+- **Pre-Norm Architecture**: Layer normalization applied before residual connections
+- **Dropout Integration**: Dropout applied to sub-layer outputs before addition
+- **Gradient Flow**: Residual connections help maintain gradient flow through deep networks
+
+### Model Components Summary
+
+| Component | Class | Paper Section | Key Features |
+|-----------|-------|---------------|--------------|
+| Multi-Head Attention | `MultiHeadAttention` | 3.2.1-3.2.2 | 8 heads, scaled dot-product, masking support |
+| Position-wise FFN | `PositionwiseFeedForward` | 3.3 | Two linear layers with ReLU, dropout |
+| Encoder Layer | `EncoderLayer` | 3.1 | Self-attention + FFN, residual connections |
+| Decoder Layer | `DecoderLayer` | 3.1 | Masked self-attention + encoder-attention + FFN |
+| Positional Encoding | `PositionalEncoding` | 3.5 | Sinusoidal encoding, max_len=5000 |
+| Encoder | `Encoder` | 3.1 | N stacked layers, embedding + positional encoding |
+| Decoder | `Decoder` | 3.1 | N stacked layers, embedding + positional encoding |
+| Transformer | `Transformer` | 3.1-3.5 | Complete model with masking and weight sharing |
+
+### Paper Hyperparameters Implementation
+
+**Paper Reference:** Section 3 "Model Architecture" and Table 1 "Model Variations"
+
+The implementation follows the paper's base model hyperparameters:
+
+| Hyperparameter | Paper Value | Implementation |
+|----------------|-------------|----------------|
+| d_model | 512 | `d_model` parameter |
+| d_ff | 2048 | `d_ff` parameter |
+| h (heads) | 8 | `heads` parameter |
+| N (layers) | 6 | `N` parameter |
+| Dropout | 0.1 | `p` parameter |
+| max_len | 5000 | `max_len` parameter in PositionalEncoding |
+
+**Key Paper Formulas Implemented:**
+- **Attention**: $\text{Attention}(Q,K,V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V$ (Section 3.2.1)
+- **Multi-Head**: $\text{MultiHead}(Q,K,V) = \text{Concat}(\text{head}_1,...,\text{head}_h)W^O$ (Section 3.2.2)
+- **FFN**: $\text{FFN}(x) = \max(0, xW_1 + b_1)W_2 + b_2$ (Section 3.3)
+- **Positional Encoding**: $PE_{(pos,2i)} = \sin\left(\frac{pos}{10000^{2i/d_{model}}}\right)$ (Section 3.5)
+- **Sub-layer Output**: $\text{LayerNorm}(x + \text{Sublayer}(x))$ (Section 3.1)
+- **Embedding Scaling**: $\text{Embedding} \times \sqrt{d_{model}}$ (Section 3.1)
 
 ## Training Details & Results
 
@@ -267,21 +439,36 @@ The transition from older torchtext APIs to the modern version required signific
 - Custom collate functions provide better control over batching
 - Proper vocabulary building with special tokens is crucial for transformer training
 
+### Model Implementation Challenges
+
+**Challenge 1: Multi-Head Attention Tensor Shapes**
+- **Problem**: Complex tensor reshaping for multi-head attention with proper broadcasting
+- **Solution**: Used `permute(0, 2, 1, 3)` to switch head and sequence dimensions
+- **Learning**: Understanding tensor broadcasting and memory layout is crucial for attention mechanisms
+
+**Challenge 2: Attention Masking Implementation**
+- **Problem**: Properly implementing causal masking for decoder self-attention
+- **Solution**: Combined padding mask with causal mask using `torch.tril()` and bitwise operations
+- **Learning**: Masking is essential for preventing information leakage in autoregressive models
+
+**Challenge 3: Residual Connections and Layer Normalization**
+- **Problem**: Ensuring proper gradient flow through deep networks
+- **Solution**: Applied layer normalization before residual connections (pre-norm architecture)
+- **Learning**: The order of operations significantly affects training stability
+
 ### Future Challenges to Address
 
-*[These will be documented as the project progresses]*
-
-1. **Model Implementation Challenges**:
-   - Multi-head attention tensor shape debugging
-   - Proper implementation of attention masks
-   - Residual connections and layer normalization
-
-2. **Training Challenges**:
+1. **Training Implementation**:
    - Custom learning rate schedule with warmup
    - Gradient clipping implementation
    - Label smoothing for loss function
 
-3. **Performance Optimization**:
+2. **Performance Optimization**:
    - Memory management for large batches
    - GPU utilization optimization
    - Training time estimation
+
+3. **Model Evaluation**:
+   - BLEU score calculation
+   - Attention visualization tools
+   - Model interpretability analysis

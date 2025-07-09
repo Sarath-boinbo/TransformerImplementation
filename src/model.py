@@ -3,18 +3,6 @@ from torch import Tensor, nn
 from typing import Any, Optional, Tuple
 
 """
-Base values from paper:
-- Number of Layers (N): 6 identical layers in both the encoder and decoder stacks.
-- Model Dimension (d_model): 512.
-- Feed-Forward Dimension (d_ff): 2048.
-- Number of Attention Heads (h): 8.
-- Key Dimension (d_k): 64 (calculated as d_model / h).
-- Value Dimension (d_v): 64 (calculated as d_model / h).
-- Dropout Rate (P_drop): 0.1.
-- Label Smoothing (ε_ls): 0.1.
-"""
-
-"""
 First class to emulate the MultiHeadAttention formula that the paper specifies.
 Calculates the attention for all heads and outputs the final output tensor and the attention weights.
 """
@@ -345,3 +333,87 @@ class Decoder(nn.Module):
 
         # Return the final output tensor and the attention weights from the last layer
         return trg, attention
+
+"""
+Eighth and final class that assembles the full Transformer model.
+This top-level module brings the Encoder and Decoder together and handles the 
+mask creation logic.
+"""
+class Transformer(nn.Module):
+    def __init__(self, encoder: Encoder, decoder: Decoder, src_pad_idx: int, trg_pad_idx: int, device: torch.device) -> None:
+        super().__init__()
+        
+        # Store the instantiated encoder and decoder modules
+        self.encoder: Encoder = encoder
+        self.decoder: Decoder = decoder
+
+        # Store padding indices and the device, needed for mask creation
+        self.src_pad_idx: int = src_pad_idx
+        self.trg_pad_idx: int = trg_pad_idx
+        self.device: torch.device = device
+        
+        # Final linear layer to get prediction scores over the target vocabulary
+        # The output dimension is the size of the target vocabulary
+        output_dim = self.decoder.tok_embedding.num_embeddings
+        d_model = self.encoder.d_model
+        self.fc_out: nn.Linear = nn.Linear(d_model, output_dim)
+
+        # The paper mentions sharing weights between the decoder's embedding layer
+        # and the final linear layer. This is a common practice to reduce parameters.
+        self.fc_out.weight = self.decoder.tok_embedding.weight
+        
+    def create_src_mask(self, src: Tensor) -> Tensor:
+        """
+        Creates a mask for the source sequence to ignore padding tokens.
+        """
+        # src shape: [batch_size, src_len]
+        # Creates a boolean mask where pad tokens are False.
+        src_mask = (src != self.src_pad_idx).unsqueeze(1).unsqueeze(2)
+        # Final shape: [batch_size, 1, 1, src_len] for broadcasting.
+        return src_mask
+    
+    def create_trg_mask(self, trg: Tensor) -> Tensor:
+        """
+        Creates a combined mask for the target sequence. It masks both padding tokens
+        and future tokens.
+        """
+        # trg shape: [batch_size, trg_len]
+        trg_len = trg.shape[1]
+        
+        # 1. Create a padding mask for the target sequence
+        # Shape: [batch_size, 1, 1, trg_len]
+        trg_pad_mask = (trg != self.trg_pad_idx).unsqueeze(1).unsqueeze(2)
+        
+        # 2. Create a "subsequent" or "look-ahead" mask
+        # This prevents a position from attending to future positions.
+        # Shape: [trg_len, trg_len]
+        trg_sub_mask = torch.tril(torch.ones((trg_len, trg_len), device = self.device)).bool()
+        
+        # 3. Combine the two masks with a bitwise AND
+        # The final mask is True only for non-padding tokens in valid positions.
+        # Broadcasting handles the shape mismatch correctly.
+        trg_mask = trg_pad_mask & trg_sub_mask
+        
+        return trg_mask
+        
+    def forward(self, src: Tensor, trg: Tensor) -> Tuple[Tensor, Tensor]:
+        """
+        Defines the forward pass for the entire Transformer model.
+        """
+        # 1. Create masks for the source and target sequences
+        src_mask: Tensor = self.create_src_mask(src)
+        trg_mask: Tensor = self.create_trg_mask(trg)
+        
+        # 2. Pass the source sequence and its mask to the encoder
+        enc_src: Tensor = self.encoder(src, src_mask)
+        
+        # 3. Pass the target sequence, encoder output, and masks to the decoder
+        output: Tensor
+        attention: Tensor
+        output, attention = self.decoder(trg, enc_src, trg_mask, src_mask)
+        
+        # 4. Pass the decoder's output through the final linear layer
+        output = self.fc_out(output)
+        
+        # Return the final prediction scores and the attention weights
+        return output, attention
